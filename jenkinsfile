@@ -1,5 +1,9 @@
 pipeline {
     agent any
+    environment {
+        // Fetch the SSH key from Jenkins credentials and store it in ANSIBLE_SSH_KEY
+        ANSIBLE_SSH_KEY = credentials('ansible_key')
+    }
     parameters{
         string(name: 'hostname', defaultValue: '', description: 'Enter the hostname')
         choice(name: 'add_or_extend', choices: ['Add Disk', 'Extend Existing Disk'], description: 'Select "Add Disk" if you want to add a disk to the existing server. Select "Extend Existing disk" if you want to extend a existing disk')
@@ -29,19 +33,33 @@ pipeline {
             steps{
                 script{
                     if(params.mountPoint_name && params.disk_size){
-                        def extraVarsMap = [
-                            'mountPoint_name': params.mountPoint_name,
-                            'ec2_instance_volume_size': params.disk_size
-                        ]
-                        echo "Extra Vars: ${extraVarsMap}"
-                        ansiblePlaybook(
-                            playbook: '/ansible/playbooks/volume_extend.yml',  // Path to the playbook
-                            inventory: '/ansible/hosts',  // Path to the inventory file
-                            //become: true,  
-                            //becomeUser: 'root',  // The user to escalate to, if needed
-                            extraVars: extraVarsMap,
-                            //ansibleSSHPrivateKey: "${SSH_PRIVATE_KEY}"
-                        )
+                        sh """
+                            #!/bin/bash
+                            export ANSIBLE_HOST_KEY_CHECKING=False
+                            ansible-playbook --vault-password-file /ansible/playbooks/vault_pass.txt -i /ansible/hosts /ansible/playbooks/volume_extend.yml --user=testUser --private-key=${ANSIBLE_SSH_KEY} -e "mountPoint_name=${params.mountPoint_name} ec2_instance_volume_size=${params.disk_size}"
+                            
+                            """
+
+                    } else {
+                        echo "Mountpoint name OR disk size has not provided."
+                    }
+                }
+                
+            }
+        }
+        stage('Add Disk') {
+            when{
+                expression{return params.add_or_extend=='Add Disk'}
+            }
+            steps{
+                script{
+                    if(params.mountPoint_name && params.disk_size){
+                        sh """
+                            #!/bin/bash
+                            export ANSIBLE_HOST_KEY_CHECKING=False
+                            ansible-playbook --vault-password-file /ansible/playbooks/vault_pass.txt -i /ansible/hosts /ansible/playbooks/add_vol.yml --user=testUser --private-key=${ANSIBLE_SSH_KEY} -e "mountPoint_name=${params.mountPoint_name} ec2_instance_volume_size=${params.disk_size}"
+                            
+                            """
 
                     } else {
                         echo "Mountpoint name OR disk size has not provided."
