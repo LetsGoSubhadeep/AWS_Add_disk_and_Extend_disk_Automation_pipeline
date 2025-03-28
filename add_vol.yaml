@@ -39,7 +39,7 @@
         ec2_region: "{{ ec2_metadata.ansible_facts.ansible_ec2_instance_identity_document_region }}"
         ec2_name: "{{ ec2_info.instances | json_query('[].tags.Name') | first }}"
 
-    - name: debug instance ID, AZ
+    - name: debug instance ID, AZ, Region, Instance Name
       debug:
         msg:
           - " Instance ID: {{ instance_id }}"
@@ -63,6 +63,27 @@
         msg: "{{mountPoint_name}} is Not present in the server. Proceeding further..."
       when: mount_status.rc != 0
 
+    - name: Get a list of used device name from the instance
+      set_fact:
+        used_devices: "{{ ec2_info.instances[0].block_device_mappings | map(attribute='device_name') | list }}"
+
+    - name: Debug used device
+      debug:
+        var: used_devices
+
+    - name: Generate an available device name to attach into the EC2
+      set_fact:
+        available_device: "{{ ['/dev/sdf', '/dev/sdg', '/dev/sdh', '/dev/sdi', '/dev/sdj', '/dev/sdk', '/dev/sdl', '/dev/sdm', '/dev/sdn', '/dev/sdo', '/dev/sdp'] | difference(used_devices) | sort}}"
+
+    - name: Debug avilable device
+      debug:
+        var: available_device
+
+    - name: Set the new device name
+      set_fact:
+        new_device_name: "{{available_device[0]}}"
+      when: available_device | length > 0
+
     - name: Create the Vol and attach with the instance
       amazon.aws.ec2_vol:
         instance: "{{ instance_id | first }}"
@@ -70,15 +91,20 @@
         availability_zone: "{{ availability_zone }}"
         region: "{{ ec2_region }}"
         volume_type: gp3
+        device_name: "{{new_device_name}}"
         tags:
-          Name: " {{ec2_name}}-{{mountPoint_name}} "
+          Name: "{{ec2_name}}-{{mountPoint_name}}"
       register: ec2_vol
       when: mount_status.rc != 0
 
     - name: Debug ec2_vol
       debug:
         msg: "{{ ec2_vol }}"
-      when: ec2_vol.changed
+
+    - name: Fail when the volume is not created
+      fail:
+        msg: "Failed! Volume was not created."
+      when: not ec2_vol.changed
 
     - name: Pause for 30 Secs
       pause:
@@ -107,7 +133,7 @@
       when: ec2_vol.changed
 
     - name: Get the block ID for new FS
-      shell: blkid /dev/xvdf|awk '{print $2}'
+      shell: blkid /dev/{{new_disk.stdout}}|awk '{print $2}'
       register: blkid
       when: ec2_vol.changed
 
