@@ -13,6 +13,17 @@
 
   tasks:
 
+    - name: Get the Mountpoint status
+      command: mountpoint {{mountPoint_name}}
+      register: mount_avlbl
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Fail when Mountpoint doesn't exists
+      fail:
+        msg: "The {{ mountPoint_name }} doesn't exist in the server. Please provide a available mountpoint to extend."
+      when: mount_avlbl.rc != 0
+
     - name: Gather EC2 instance ID
       amazon.aws.ec2_metadata_facts:
       register: ec2_metadata
@@ -39,6 +50,9 @@
           attachment.instance_id: "{{ ec2_metadata.ansible_facts.ansible_ec2_instance_identity_document_instanceid }}"  # attachment.instance_id is a key that checks if the EBS volume is attached to an EC2 instance and if so, filters the volumes by that instance ID.
       register: ebs_volumes
 
+    - name: Debug EBS Vols
+      debug:
+        msg: "{{ ebs_volumes }}"
 
     - name: Get the attached EBS vol tag details
       set_fact:
@@ -55,14 +69,41 @@
       set_fact:
         vol_id: "{{ ( tag_details | selectattr('tags.Name','search', mountPoint_name) | map(attribute='id') | first ) }}"
 
-    - name: Debug matched vol id
+    - name: Show the volume which needs to be extended
       debug:
-        msg: "{{ vol_id }}"
+        msg: "The volume needs to be extended is:{{ vol_id }}"
 
+    - name: Get the volume info of the volume
+      amazon.aws.ec2_vol_info:
+        region: "{{ ec2_metadata.ansible_facts.ansible_ec2_instance_identity_document_region }}"
+        filters:
+          volume-id: "{{vol_id}}"
+      register: vol_info
 
-    - name: Proceed further once found the volume which matches with the Mountpoint Name
+    - name: debug the vol_info
       debug:
-        msg: "Proceeding further as we have found a volume which matches with the Mountpoint name. Volume ID: {{ vol_id }} "
+        msg: "{{vol_info}}"
+
+    - name: Get the device name for the volume
+      set_fact:
+        vol_device_name: "{{vol_info.volumes[0].attachment_set[0].device}}"
+
+    - name: Get the volume size of the volume
+      set_fact:
+        vol_size: "{{vol_info.volumes[0].size}}"
+
+    - name: Debug vol size
+      debug:
+        var: vol_size
+
+    - name: Fail when the requested size same or less than the actual size of the vol
+      fail:
+        msg: "The requested size is {{ec2_instance_volume_size}}GB & the volume size is {{vol_size}}GB. Please provide a value more than {{vol_size}}GB."
+      when: ec2_instance_volume_size | int <= vol_size | int
+
+    - name: Proceed further once found the volume which matches with the Mountpoint Name and mountpoint size is greater than current vol size
+      debug:
+        msg: "Proceed further once found the volume which matches with the Mountpoint Name and mountpoint size is greater than current vol size. Tag Name: {{tag_details}}"
 
     - name: Get the instance ID
       set_fact:
@@ -78,7 +119,12 @@
         id: "{{ vol_id }}"
         modify_volume: true
         volume_size: "{{ ec2_instance_volume_size }}"    # ec2_instance_volume_size: the value for this parameter will be passed from jenkins input using "disk_size" parameter
+        device_name: "{{vol_device_name}}"
       register: resize_volume
+
+    - name: Debug resize output
+      debug:
+        msg: "{{ resize_volume }}"
 
     - name: Pause for 30 Secs
       pause:
@@ -93,7 +139,6 @@
     - name: Getting the block device name
       set_fact:
         block_device_name: "{{ block_device.stdout }}"
-
      # - name: Rescan the block device
      # shell: sudo bash -c "echo 1 > /sys/class/block/{{ block_device_name }}/device/rescan"
 
@@ -108,13 +153,15 @@
     - name: Run the os end command to grow the FS when the FS type is 'xfs'
       shell: |
         xfs_growfs {{mountPoint_name}}
-        df -hT {{mountPoint_name}}
       when: fs_type_name == 'xfs'
+
+    - name: Get the df -hT output
+      command: df -hT {{mountPoint_name}}
       register: xfs_extended
 
     - name: Debug the output after growing the FS
       debug:
-        msg: "The xfs mountpoint: {{mountPoint_name}} has extended \n {{ xfs_extended }}"
+        msg: "The xfs mountpoint: {{mountPoint_name}} has extended \n {{ xfs_extended.stdout}}"
       when: fs_type_name == 'xfs'
 
     - name: Run the os end command to grow the FS when the FS type is 'ext2' or 'ext3' or 'ext4'
