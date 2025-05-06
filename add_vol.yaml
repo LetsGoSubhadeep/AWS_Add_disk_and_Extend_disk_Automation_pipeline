@@ -110,49 +110,40 @@
       pause:
         seconds: 30
         prompt: "Waiting for 30 Seconds. Volume is getting added..."
-      when: ec2_vol.changed
 
     - name: Find the new disk name
       shell: lsblk -nd -o NAME,MOUNTPOINT | awk '$2 == "" {print $1}' | tail -1
       register: new_disk
-      when: ec2_vol.changed
 
     - name: Debug newly added disk name
       debug:
         msg: "New Disk Name: {{new_disk.stdout}} "
-      when: ec2_vol.changed
 
     - name: Make xfs file system for the new disk
       shell: mkfs.xfs /dev/{{new_disk.stdout}}
       register: mkfs_out
-      when: ec2_vol.changed
 
     - name: Debug mkfs_out
       debug:
         msg: "{{ mkfs_out }}"
-      when: ec2_vol.changed
 
     - name: Get the block ID for new FS
       shell: blkid /dev/{{new_disk.stdout}}|awk '{print $2}'
       register: blkid
-      when: ec2_vol.changed
 
     - name: Debug blkid
       debug:
         msg: "{{ blkid.stdout }}"
-      when: ec2_vol.changed
 
     - name: Create the mountpoint
       file:
         path: " {{ mountPoint_name }} "
         state: directory
-      when: ec2_vol.changed
 
     - name: Pause for 10 Secs
       pause:
         seconds: 10
         prompt: "Waiting for 10 Seconds. Mountpoint is getting created..."
-      when: ec2_vol.changed
 
     - name: make a fstab entry and mount the filesystem
       lineinfile:
@@ -160,7 +151,6 @@
         line: "{{ blkid.stdout }}  {{ mountPoint_name }}   xfs   defaults  0 0"
         state: present
         backup: yes
-      when: ec2_vol.changed
 
     - name: Mount the FS
       mount:
@@ -169,14 +159,12 @@
         fstype: xfs
         opts: defaults
         state: mounted
-      when: ec2_vol.changed
 
     - name: Capture the df -hT output for the "{{mountPoint_name}}"
       shell: df -hT "{{mountPoint_name}}"
       register: df_out
-      when: ec2_vol.changed
 
     - name: Print the captured output
       debug:
         msg: "{{df_out.stdout}}"
-      when: ec2_vol.changed
+        
