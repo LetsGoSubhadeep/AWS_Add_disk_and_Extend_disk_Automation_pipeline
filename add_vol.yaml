@@ -54,8 +54,8 @@
       changed_when: false
 
     - name: Check mountpoint already present in the server or not
-      debug:
-        msg: "{{mountPoint_name}} is already present in the server. Remaining plays will skip"
+      fail:
+        msg: "{{mountPoint_name}} is already present in the server."
       when: mount_status.rc == 0
 
     - name: Check mountpoint already present in the server or not
