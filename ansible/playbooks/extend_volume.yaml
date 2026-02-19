@@ -12,8 +12,7 @@
       
     - name: Fail when Mountpoint doesn't exists
       fail:
-        msg: The {{ mountPoint_name }} doesn't exist in the server. Please provide a
-          available mountpoint to extend.
+        msg: The {{ mountPoint_name }} doesn't exist in the server. Please provide an available mountpoint to extend.
       when: mount_avlbl.rc != 0
       
     - name: Gather the EC2 info of Manage Node
