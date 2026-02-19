@@ -1,0 +1,141 @@
+---
+- name: EC2 Volume extend
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Get the Mountpoint status
+      command: mountpoint {{mountPoint_name}}
+      register: mount_avlbl
+      changed_when: false
+      ignore_errors: yes
+      
+    - name: Fail when Mountpoint doesn't exists
+      fail:
+        msg: The {{ mountPoint_name }} doesn't exist in the server. Please provide a
+          available mountpoint to extend.
+      when: mount_avlbl.rc != 0
+      
+    - name: Gather the EC2 info of Manage Node
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_default_region }}"
+        filters:
+          private-ip-address: "{{ inventory_hostname }}"
+      register: ec2_info
+      become: false
+      delegate_to: localhost
+      
+    - name: Debug ec2_info
+      debug:
+        msg: "{{ ec2_info }}"
+        
+    - name: Set the instance ID, AZ
+      set_fact:
+        instance_id: "{{ ec2_info.instances[0].instance_id }}"
+        availability_zone: "{{ ec2_info.instances[0].placement.availability_zone }}"
+        ec2_region: "{{ aws_default_region }}"
+        ec2_name: "{{ ec2_info.instances[0].tags.Name | default('unnamed') }}"
+        
+    - name: Get the vol-id for the device from the OS
+      shell: lsblk -ndo NAME,SERIAL,MOUNTPOINT|grep -i '{{ mountPoint_name }}' |awk '{print $2}'
+      register: vol_id_without_hyphen
+      
+    - name: Add hyphen in volume id
+      set_fact:
+        vol_id: "{{ vol_id_without_hyphen.stdout[:3] }}-{{ vol_id_without_hyphen.stdout[3:] }}"
+    
+    - name: Show the volume ID which needs to be extended
+      debug:
+        msg: The volume needs to be extended is:{{ vol_id }}
+        
+    - name: Get the volume info of the volume
+      amazon.aws.ec2_vol_info:
+        region: "{{ aws_default_region }}"
+        filters:
+          volume-id: "{{vol_id}}"
+      register: vol_info
+      become: false
+      delegate_to: localhost
+      
+    - name: debug the vol_info
+      debug:
+        msg: "{{vol_info}}"
+
+    - name: Get the volume size of the volume
+      set_fact:
+        vol_size: "{{vol_info.volumes[0].size}}"
+        
+    - name: Debug vol size
+      debug:
+        var: vol_size
+
+    - name: Show the new calculated size
+      debug:
+        msg: "The total size after addition will be {{ (vol_size | int) + (ec2_instance_volume_size | int) }} GB"
+          
+    - name: Debug instance_id value
+      debug:
+        msg: "{{ instance_id }}"
+        
+    - name: Resize the volume as requested
+      amazon.aws.ec2_vol:
+        instance: "{{ instance_id }}"
+        id: "{{ vol_id }}"
+        modify_volume: true
+        volume_size: "{{ (vol_size | int) + (ec2_instance_volume_size | int) }}"
+      register: resize_volume
+      become: false
+      delegate_to: localhost
+      
+    - name: Debug resize output
+      debug:
+        msg: "{{ resize_volume }}"
+        
+    - name: Pause for 10 Secs
+      pause:
+        seconds: 10
+        prompt: Waiting for 10 Seconds. Volume is getting extended...
+        
+    - name: getting the block device for the Mountpoint
+      shell: lsblk -o NAME,MOUNTPOINT | grep '{{mountPoint_name}}' | awk '{print $1}'
+      register: block_device
+      changed_when: false
+      
+    - name: Set fact the block device name
+      set_fact:
+        block_device_name: "{{ block_device.stdout }}"
+        
+    - name: Run the os end command to get the Filesystem type
+      shell: " df --output=fstype {{ mountPoint_name }} | tail -1"
+      register: fs_type
+      
+    - name: Set fact the FS type
+      set_fact:
+        fs_type_name: "{{ fs_type.stdout }}"
+        
+    - name: Run the os end command to grow the FS when the FS type is 'xfs'
+      shell: |
+        xfs_growfs {{mountPoint_name}}
+      when: fs_type_name == 'xfs'
+      
+    - name: Get the df -hT output
+      command: df -hT {{mountPoint_name}}
+      register: xfs_extended
+      
+    - name: Debug the output after growing the FS
+      debug:
+        msg: |-
+          The xfs mountpoint: {{mountPoint_name}} has extended 
+           {{ xfs_extended.stdout}}
+      when: fs_type_name == 'xfs'
+      
+    - name: Run the os end command to grow the FS when the FS type is 'ext2' or 'ext3' or 'ext4'
+      shell: |
+        resize2fs {{mountPoint_name}}
+        df -hT {{mountPoint_name}}
+      when: fs_type_name in ['ext2', 'ext3', 'ext4']
+      
+    - name: Debug the output after growing the FS
+      debug:
+        msg: "The {{ fs_type_name }} mountpoint: {{mountPoint_name}} has extended"
+      when: fs_type_name in ['ext2', 'ext3', 'ext4']
