@@ -1,0 +1,157 @@
+---
+- name: Add volume to given EC2
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: requested mountpoint status
+      command: mountpoint {{mountPoint_name}}
+      register: mount_status
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Fail when mountpoint is already present in the server
+      fail:
+        msg: "{{mountPoint_name}} is already present in the server."
+      when: mount_status.rc == 0
+
+    - name: Proceed further when mountpoint is not present not present in the server
+      debug:
+        msg: "{{mountPoint_name}} is Not present in the server. Proceeding further..."
+      when: mount_status.rc != 0
+      
+    - name: Gather the EC2 info of Manage Node
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_default_region }}"
+        filters:
+          private-ip-address: "{{ inventory_hostname }}"
+      register: ec2_info
+      become: false
+      delegate_to: localhost
+
+    - name: Debug ec2_info
+      debug:
+        msg: "{{ ec2_info }}"
+
+    - name: Set the instance ID, AZ
+      set_fact:
+        instance_id: "{{ ec2_info.instances[0].instance_id }}"
+        availability_zone:  "{{ ec2_info.instances[0].placement.availability_zone }}"
+        ec2_region: "{{ aws_default_region }}"
+        ec2_name: "{{ ec2_info.instances[0].tags.Name | default('unnamed') }}"
+
+    - name: debug instance ID, AZ, Region, Instance Name
+      debug:
+        msg:
+          - " Instance ID: {{ instance_id }}"
+          - " AZ: {{ availability_zone }}"
+          - " ec2_region: {{ ec2_region }} "
+          - " ec2_name: {{ ec2_name }}"
+
+    - name: Get a list of used device name from the instance
+      set_fact:
+        used_devices: "{{ ec2_info.instances[0].block_device_mappings | map(attribute='device_name') | list }}"
+
+    - name: Debug used device
+      debug:
+        var: used_devices
+
+    - name: Generate an available device name to attach into the EC2
+      set_fact:
+        available_device: "{{ ['/dev/sdf', '/dev/sdg', '/dev/sdh', '/dev/sdi', '/dev/sdj', '/dev/sdk', '/dev/sdl', '/dev/sdm', '/dev/sdn', '/dev/sdo', '/dev/sdp'] | difference(used_devices) | sort}}"
+
+    - name: Debug avilable device
+      debug:
+        var: available_device
+
+    - name: Set the new device name
+      set_fact:
+        new_device_name: "{{available_device[0]}}"
+      when: available_device | length > 0
+
+    - name: Create the Vol and attach with the instance
+      amazon.aws.ec2_vol:
+        instance: "{{ instance_id }}"
+        volume_size: "{{ ec2_instance_volume_size }}"
+        availability_zone: "{{ availability_zone }}"
+        region: "{{ ec2_region }}"
+        volume_type: gp3
+        device_name: "{{new_device_name}}"
+        tags:
+          Name: "{{ec2_name}}-{{mountPoint_name}}"
+      register: ec2_vol
+      become: false
+      delegate_to: localhost
+      when: mount_status.rc != 0
+
+    - name: Debug ec2_vol
+      debug:
+        msg: "{{ ec2_vol }}"
+
+    - name: Fail when the volume is not created
+      fail:
+        msg: "Failed! Volume was not created."
+      when: not ec2_vol.changed
+
+    - name: Pause for 10 Secs
+      pause:
+        seconds: 10
+        prompt: "Waiting for 10 Seconds. Volume is getting added..."
+
+    - name: Find the new disk name
+      shell: lsblk -ndo NAME,SERIAL | grep "{{ ec2_vol.volume_id | replace('-', '') }}" | awk '{print $1}'
+      register: new_disk
+
+    - name: Debug newly added disk name
+      debug:
+        msg: "New Disk Name: {{new_disk.stdout}} "
+
+    - name: Make xfs file system for the new disk
+      shell: mkfs.xfs /dev/{{new_disk.stdout}}
+      register: mkfs_out
+
+    - name: Debug mkfs_out
+      debug:
+        msg: "{{ mkfs_out }}"
+
+    - name: Get the block ID for new FS
+      shell: blkid /dev/{{new_disk.stdout}}|awk '{print $2}'
+      register: blkid
+
+    - name: Debug blkid
+      debug:
+        msg: "{{ blkid.stdout }}"
+
+    - name: Create the mountpoint
+      file:
+        path: "{{ mountPoint_name }}"
+        state: directory
+
+    - name: Pause for 10 Secs
+      pause:
+        seconds: 10
+        prompt: "Waiting for 10 Seconds. Mountpoint is getting created..."
+
+    - name: make a fstab entry and mount the filesystem
+      lineinfile:
+        path: /etc/fstab
+        line: "{{ blkid.stdout }}  {{ mountPoint_name }}   xfs   defaults  0 0"
+        state: present
+        backup: yes
+
+    - name: Mount the FS
+      mount:
+        path: "{{ mountPoint_name }}"
+        src: "{{ blkid.stdout }}"
+        fstype: xfs
+        opts: defaults
+        state: mounted
+
+    - name: Capture the df -hT output for the "{{mountPoint_name}}"
+      shell: df -hT "{{ mountPoint_name }}"
+      register: df_out
+
+    - name: Print the captured output
+      debug:
+        msg: "{{ df_out.stdout }}"
