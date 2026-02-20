@@ -120,10 +120,6 @@
       shell: |
         xfs_growfs {{mountPoint_name}}
       when: fs_type_name == 'xfs'
-
-    - name: Rescan the device
-      shell: echo 1>/sys/class/block/{{ block_device_name }}/device/rescan
-      when: fs_type_name in ['ext2', 'ext3', 'ext4']
       
     - name: Run the os end command to grow the FS when the FS type is 'ext2' or 'ext3' or 'ext4'
       shell: resize2fs {{mountPoint_name}}
