@@ -105,7 +105,8 @@
         block_device_name: "{{ block_device.stdout }}"
         
     - name: Debug block device name
-      msg: "{{ block_device.stdout }}"
+      debug:
+        msg: "{{ block_device.stdout }}"
         
     - name: Run the os end command to get the Filesystem type
       shell: " df --output=fstype {{ mountPoint_name }} | tail -1"
