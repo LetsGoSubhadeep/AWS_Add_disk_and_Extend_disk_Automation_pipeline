@@ -81,6 +81,7 @@
         id: "{{ vol_id }}"
         modify_volume: true
         volume_size: "{{ (vol_size | int) + (ec2_instance_volume_size | int) }}"
+        zone: "{{ availability_zone }}"
       register: resize_volume
       delegate_to: localhost
       become: false
