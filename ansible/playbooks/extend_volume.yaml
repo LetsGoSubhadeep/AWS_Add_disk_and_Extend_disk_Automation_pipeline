@@ -78,12 +78,12 @@
         
     - name: Resize the volume as requested
       amazon.aws.ec2_vol:
-        volume_id: "{{ vol_id }}"
+        id: "{{ vol_id }}"
+        modify_volume: true
         volume_size: "{{ (vol_size | int) + (ec2_instance_volume_size | int) }}"
-        state: present
       register: resize_volume
-      become: false
       delegate_to: localhost
+      become: false
       
     - name: Debug resize output
       debug:
